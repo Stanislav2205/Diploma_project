@@ -11,7 +11,7 @@ from django.utils.translation import gettext_lazy as _
 
 
 class UserManager(BaseUserManager):
-    """Custom manager that uses email as the unique identifier."""
+    """Пользовательский менеджер, использующий электронную почту в качестве уникального идентификатора."""
 
     use_in_migrations = True
 
@@ -41,7 +41,7 @@ class UserManager(BaseUserManager):
         return self._create_user(email, password, **extra_fields)
 
 class User(AbstractUser):
-    """Application user that authenticates with email address."""
+    """Пользователь приложения, который аутентифицируется по адресу электронной почты."""
 
     class Role(models.TextChoices):
         BUYER = "buyer", _("Покупатель")
@@ -69,7 +69,7 @@ class User(AbstractUser):
 
 
 class Shop(models.Model):
-    """Retail partner that supplies products."""
+    """Розничный партнер, поставляющий продукцию."""
 
     owner = models.ForeignKey(
         User,
