@@ -1,6 +1,3 @@
-import io
-from typing import Any
-
 import requests
 import yaml
 from django.contrib.auth import get_user_model
