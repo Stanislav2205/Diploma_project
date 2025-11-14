@@ -4,9 +4,10 @@ from typing import Any
 import requests
 import yaml
 from django.contrib.auth import get_user_model
-from django.db import transaction
+
 from django.http import Http404
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from rest_framework import generics, permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.pagination import PageNumberPagination
@@ -79,10 +80,7 @@ class EmailConfirmationView(APIView):
         except EmailConfirmationToken.DoesNotExist:
             return Response({"detail": "Неверный токен."}, status=status.HTTP_400_BAD_REQUEST)
 
-        if token.expires_at < token.created_at:
-            return Response({"detail": "Токен недействителен."}, status=status.HTTP_400_BAD_REQUEST)
-
-        if token.expires_at < token.created_at.now():
+        if token.expires_at < timezone.now():
             return Response({"detail": "Срок действия токена истёк."}, status=status.HTTP_400_BAD_REQUEST)
 
         token.mark_as_used()
@@ -102,8 +100,7 @@ class ProductViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Product.objects.all().prefetch_related("infos__shop", "infos__parameters__parameter")
     serializer_class = ProductSerializer
     permission_classes = [permissions.AllowAny]
-    pagination_class = PageNumberPagination
-    filterset_fields = ("category__id", "category__name")
+    filterset_fields = ("category__id", "category__name","infos__shop__id")
     search_fields = ("name", "description", "infos__model")
     ordering_fields = ("name", "infos__price")
 
