@@ -55,8 +55,8 @@ class CatalogImporter:
             category, created = Category.objects.get_or_create(name=name)
             if created:
                 result.categories_created += 1
-            self.shop.categories.add(category)
             category_map[external_id] = category
+            self.shop.categories.add(category)
 
         processed_external_ids: set[int] = set()
         for item in goods:
@@ -90,7 +90,6 @@ class CatalogImporter:
             if created:
                 result.product_infos_created += 1
             processed_external_ids.add(info.external_id)
-            
             info.parameters.all().delete()
 
             for param_name, value in self._iter_parameters(item):
@@ -114,3 +113,5 @@ class CatalogImporter:
         parameters = item.get("parameters", {})
         if isinstance(parameters, dict):
             return parameters.items()
+        return []
+

@@ -35,7 +35,7 @@ def notify_admin_about_order(order):
         "",
         "Состав заказа:",
     ]
-    for item in order.items.all():  
+    for item in order.items.select_related("product_info__product", "product_info__shop"):
         message_lines.append(
             f"- {item.product_info.product.name} ({item.product_info.shop.name}) x {item.quantity} = {item.total_price}"
         )
@@ -46,7 +46,3 @@ def notify_admin_about_order(order):
         [settings.ORDER_NOTIFICATION_EMAIL],
     )
 
-def send_password_reset_email(user, reset_token):
-    subject = "Сброс пароля"
-    message = f"Для сброса пароля используйте токен: {reset_token}"
-    send_mail(subject, message, "noreply@example.com", [user.email])
