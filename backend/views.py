@@ -4,13 +4,9 @@ from typing import Any
 import requests
 import yaml
 from django.contrib.auth import get_user_model
-
-from django.http import Http404
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import generics, permissions, status, viewsets
-from rest_framework.decorators import action
-from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -20,7 +16,6 @@ from .models import (
     Order,
     OrderItem,
     Product,
-    ProductInfo,
     Shop,
 )
 from .permissions import IsBuyer, IsEmailVerified, IsShop
@@ -201,12 +196,15 @@ class PartnerImportView(APIView):
     def post(self, request, *args, **kwargs):
         payload = request.data
         if "url" in payload:
-            response = requests.get(payload["url"], timeout=10)
-            response.raise_for_status()
-            payload = yaml.safe_load(io.StringIO(response.text))
+            try:
+                response = requests.get(payload["url"], timeout=10)
+                response.raise_for_status()
+            except requests.RequestException as exc:
+                return Response({"detail": f"Ошибка загрузки данных: {exc}"}, status=status.HTTP_400_BAD_REQUEST)
+            payload = yaml.safe_load(response.text)
         elif "file" in request.FILES:
             uploaded = request.FILES["file"]
-            payload = yaml.safe_load(uploaded)
+            payload = yaml.safe_load(uploaded.read())
         elif "data" in payload:
             payload = payload["data"]
 
