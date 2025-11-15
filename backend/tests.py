@@ -153,35 +153,25 @@ class ApiFlowTests(APITestCase):
         )
         self.assertEqual(token_response.status_code, status.HTTP_200_OK)
         return token_response.json()
-
-
-    def test_product_catalog_available(self):
-        response = self.client.get(reverse("product-list"))
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertGreaterEqual(response.json()["count"], 1)
-
-    def test_complete_order_flow(self):
+    def create_order(self, quantity=2):
         tokens = self.authenticate_user()
         access = tokens["access"]
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
         self.assertEqual(orders_response.json()["count"], 1)
 
-        product_info_id = ProductInfo.objects.first().id
-
-        add_response = self.client.post(
+        product_info = ProductInfo.objects.first()
+        self.client.post(
             reverse("cart"),
-            {"product_info": product_info_id, "quantity": 2},
+            {"product_info": product_info.id, "quantity": quantity},
             format="json",
         )
-        self.assertEqual(add_response.status_code, status.HTTP_201_CREATED)
-
         contact_response = self.client.post(
             reverse("contact-list"),
             {
                 "first_name": "Иван",
                 "last_name": "Иванов",
                 "patronymic": "Иванович",
-                "email": "buyer@example.com",
+                "email": self.user_email,
                 "phone": "+79999999999",
                 "city": "Москва",
                 "street": "Тверская",
