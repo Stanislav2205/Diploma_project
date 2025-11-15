@@ -4,7 +4,7 @@ from django.core import mail
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from rest_framework import status
-from rest_framework.test import APITestCase
+from rest_framework.test import APITestCase, APIClient, APIRequestFactory
 
 from backend.models import (
     Category,
@@ -16,8 +16,14 @@ from backend.models import (
     ProductInfo,
     Shop,
     User,
+    OrderItem,
 )
 from backend.services.importer import CatalogImporter
+from backend.serializers import (
+    BacketSerializer,
+    OrderItemSerializer,
+    PartherImportSerializer,
+)
 
 
 CATALOG_PAYLOAD = {
@@ -80,9 +86,31 @@ class CatalogImporterTests(TestCase):
         importer.import_payload(payload)
 
         infos = ProductInfo.objects.filter(shop=self.shop)
-        self.assertEqual(infos.count(), 1)
-        self.assertEqual(infos.first().quantity, 1)
+        self.assertEqual(infos.count(), 2)
+        self.assertEqual(
+            infos.get(external_id=CATALOG_PAYLOAD["goods"][0]["id"]).quantity,
+            1,
+        )
+        self.assertEqual(
+            infos.get(external_id=CATALOG_PAYLOAD["goods"][1]["id"]).quantity,
+            0,
+        )
         self.assertEqual(Product.objects.count(), 2)
+
+    def test_decimal_conversion_and_invalid_input(self):
+        importer = CatalogImporter(self.shop)
+        self.assertEqual(importer._to_decimal(Decimal("1.23")), Decimal("1.23"))
+        with self.assertRaises(ValueError):
+            importer._to_decimal(object())
+    
+    def test_goods_without_category_are_skipped(self):
+        importer = CatalogImporter(self.shop)
+        payload = {
+            "categories": [],
+            "goods": [{"id": 999, "category": 123, "name": "Ghost product"}],
+        }
+        result = importer.import_payload(payload)
+        self.assertEqual(result.products_created, 0)
 
 
 @override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
