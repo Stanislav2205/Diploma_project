@@ -152,7 +152,8 @@ class ApiFlowTests(APITestCase):
             {"email": self.user_email, "password": self.password},
         )
         self.assertEqual(token_response.status_code, status.HTTP_200_OK)
-        return token_response.json()["access"]
+        return token_response.json()
+
 
     def test_product_catalog_available(self):
         response = self.client.get(reverse("product-list"))
@@ -160,8 +161,10 @@ class ApiFlowTests(APITestCase):
         self.assertGreaterEqual(response.json()["count"], 1)
 
     def test_complete_order_flow(self):
-        access = self.authenticate_user()
+        tokens = self.authenticate_user()
+        access = tokens["access"]
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
+        self.assertEqual(orders_response.json()["count"], 1)
 
         product_info_id = ProductInfo.objects.first().id
 
