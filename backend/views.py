@@ -3,10 +3,12 @@ import yaml
 from django.contrib.auth import get_user_model
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from django.db.models import ProtectedError
 from rest_framework import generics, permissions, status, viewsets
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
+from rest_framework.exceptions import ValidationError
 
 from .models import (
     Contact,
@@ -164,6 +166,12 @@ class ContactViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         return Contact.objects.filter(user=self.request.user)
+    
+    def perform_destroy(self, instance):
+        try:
+            super().perform_destroy(instance)
+        except ProtectedError:
+            raise ValidationError({"detail": "Контакт используется в заказе и не может быть удалён."})
 
 
 class OrderConfirmView(APIView):
