@@ -160,7 +160,7 @@ class ApiFlowTests(APITestCase):
         self.assertEqual(orders_response.json()["count"], 1)
 
         product_info = ProductInfo.objects.first()
-        self.client.post(
+        add_response = self.client.post(
             reverse("cart"),
             {"product_info": product_info.id, "quantity": quantity},
             format="json",
@@ -179,13 +179,16 @@ class ApiFlowTests(APITestCase):
             },
             format="json",
         )
+        self.assertEqual(add_response.status_code, status.HTTP_201_CREATED)
+
         contact_id = contact_response.json()["id"]
 
-        self.client.post(
+        confirm_response = self.client.post(
             reverse("order-confirm"),
             {"contact_id": contact_id, "comment": "Побыстрее"},
             format="json",
         )
+        self.assertEqual(confirm_response.status_code, status.HTTP_201_CREATED)
         order = Order.objects.exclude(status=Order.Status.CART).get(user__email=self.user_email)
         return order, tokens, contact_id, product_info
     
@@ -300,7 +303,7 @@ class ApiFlowTests(APITestCase):
 
         list_response = self.client.get(reverse("contact-list"))
         self.assertEqual(list_response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(list_response.json()), 1)
+        self.assertEqual(list_response.json()["count"], 1)
 
         patch_response = self.client.patch(
             reverse("contact-detail", args=[contact_id]),
@@ -373,8 +376,7 @@ class ApiFlowTests(APITestCase):
 
         orders_response = partner_client.get(reverse("partner-orders"))
         self.assertEqual(orders_response.status_code, status.HTTP_200_OK)
-        self.assertGreaterEqual(len(orders_response.json()), 1)
-
+        self.assertGreaterEqual(orders_response.json()["count"], 1)
     def test_admin_can_update_order_status(self):
         order, tokens, _, _ = self.create_order(quantity=1)
         self.client.credentials()
