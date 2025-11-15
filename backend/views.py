@@ -6,6 +6,7 @@ from django.utils import timezone
 from rest_framework import generics, permissions, status, viewsets
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
 
 from .models import (
     Contact,
@@ -20,10 +21,12 @@ from .serializers import (
     BasketItemUpdateSerializer,
     BasketSerializer,
     ContactSerializer,
+    EmailConfirmationSerializer,
     OrderConfirmSerializer,
     OrderSerializer,
     OrderStatusSerializer,
     PartnerOrderSerializer,
+    PartherImportSerializer,
     ProductSerializer,
     ShopSerializer,
     UserRegistrationSerializer,
@@ -56,6 +59,14 @@ class RegistrationView(generics.CreateAPIView):
 
 class EmailConfirmationView(APIView):
     permission_classes = [permissions.AllowAny]
+
+    @extend_schema(
+        request=EmailConfirmationSerializer,
+        responses={
+            200: OpenApiResponse(description="Email успешно подтверждён."),
+            400: OpenApiResponse(description="Ошибка подтверждения email."),
+        },
+    )
 
     def post(self, request, *args, **kwargs):
         email = request.data.get("email")
@@ -100,11 +111,13 @@ class ProductViewSet(viewsets.ReadOnlyModelViewSet):
 class BasketView(APIView):
     permission_classes = [permissions.IsAuthenticated, IsBuyer, IsEmailVerified]
 
+    @extend_schema(responses=BasketSerializer)
     def get(self, request, *args, **kwargs):
         order = get_user_cart(request.user)
         serializer = BasketSerializer(order)
         return Response(serializer.data)
-
+    
+    @extend_schema(request=BasketItemUpdateSerializer, responses={201: OpenApiResponse(description="Товар добавлен")})
     def post(self, request, *args, **kwargs):
         cart = get_user_cart(request.user)
         serializer = BasketItemUpdateSerializer(data=request.data, context={"order": cart})
@@ -112,13 +125,26 @@ class BasketView(APIView):
         item = serializer.save()
         return Response({"detail": "Товар добавлен", "item_id": item.id}, status=status.HTTP_201_CREATED)
 
+    @extend_schema(request=BasketItemUpdateSerializer, responses={200: OpenApiResponse(description="Корзина обновлена")})
     def patch(self, request, *args, **kwargs):
         cart = get_user_cart(request.user)
         serializer = BasketItemUpdateSerializer(data=request.data, context={"order": cart})
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response({"detail": "Корзина обновлена."})
-
+    
+    @extend_schema(
+        parameters=[
+            OpenApiParameter(
+                name="product_info",
+                type=int,
+                required=False,
+                location=OpenApiParameter.QUERY,
+                description="ID позиции товара для удаления",
+            )
+        ],
+        responses={204: OpenApiResponse(description="Товар удалён")},
+    )
     def delete(self, request, *args, **kwargs):
         cart = get_user_cart(request.user)
         product_info_id = request.data.get("product_info") or request.query_params.get("product_info")
@@ -143,6 +169,7 @@ class ContactViewSet(viewsets.ModelViewSet):
 class OrderConfirmView(APIView):
     permission_classes = [permissions.IsAuthenticated, IsBuyer, IsEmailVerified]
 
+    @extend_schema(request=OrderConfirmSerializer, responses={201: OpenApiResponse(description="Заказ создан")})
     def post(self, request, *args, **kwargs):
         cart = get_user_cart(request.user)
         if not cart.items.exists():
@@ -190,11 +217,18 @@ class PartnerProfileView(generics.RetrieveUpdateAPIView):
 class PartnerImportView(APIView):
     permission_classes = [permissions.IsAuthenticated, IsShop]
 
+    @extend_schema(request=PartnerImportSerializer, responses={200: OpenApiResponse(description="Импорт завершён успешно.")})
     def post(self, request, *args, **kwargs):
-        payload = request.data
-        if "url" in payload:
+        serializer = PartnerImportSerializer(
+            data=request.data,
+            context={"request_data": request.data, "request_files": request.FILES},
+        )
+        serializer.is_valid(raise_exception=True)
+        validated = serializer.validated_data
+        payload = validated
+        if "url" in validated:
             try:
-                response = requests.get(payload["url"], timeout=10)
+                response = requests.get(validated["url"], timeout=10)
                 response.raise_for_status()
             except requests.RequestException as exc:
                 return Response({"detail": f"Ошибка загрузки данных: {exc}"}, status=status.HTTP_400_BAD_REQUEST)
@@ -202,8 +236,8 @@ class PartnerImportView(APIView):
         elif "file" in request.FILES:
             uploaded = request.FILES["file"]
             payload = yaml.safe_load(uploaded.read())
-        elif "data" in payload:
-            payload = payload["data"]
+        elif "data" in validated:
+            payload = validated["data"]
 
         if not isinstance(payload, dict):
             return Response({"detail": "Неверный формат данных для импорта."}, status=status.HTTP_400_BAD_REQUEST)
