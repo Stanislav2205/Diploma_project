@@ -188,6 +188,47 @@ class ApiFlowTests(APITestCase):
         )
         order = Order.objects.exclude(status=Order.Status.CART).get(user__email=self.user_email)
         return order, tokens, contact_id, product_info
+    
+    def create_order(self, quantity=2):
+        tokens = self.authenticate_user()
+        access = tokens["access"]
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
+
+        product_info = ProductInfo.objects.first()
+        add_response = self.client.post(
+            reverse("cart"),
+            {"product_info": product_info.id, "quantity": quantity},
+            format="json",
+        )
+        self.assertEqual(add_response.status_code, status.HTTP_201_CREATED)
+
+        contact_response = self.client.post(
+            reverse("contact-list"),
+            {
+                "first_name": "Иван",
+                "last_name": "Иванов",
+                "patronymic": "Иванович",
+                "email": self.user_email,
+                "phone": "+79999999999",
+                "city": "Москва",
+                "street": "Тверская",
+                "house": "1",
+            },
+            format="json",
+        )
+        self.assertEqual(contact_response.status_code, status.HTTP_201_CREATED)
+        contact_id = contact_response.json()["id"]
+
+        confirm_response = self.client.post(
+            reverse("order-confirm"),
+            {"contact_id": contact_id, "comment": "Побыстрее"},
+            format="json",
+        )
+        self.assertEqual(confirm_response.status_code, status.HTTP_201_CREATED)
+
+        order = Order.objects.exclude(status=Order.Status.CART).get(user__email=self.user_email)
+        return order, tokens, contact_id, product_info
+    
     def test_product_catalog_available(self):
         response = self.client.get(reverse("product-list"))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
