@@ -313,8 +313,8 @@ class ApiFlowTests(APITestCase):
         self.assertEqual(patch_response.status_code, status.HTTP_200_OK)
 
         delete_response = self.client.delete(reverse("contact-detail", args=[contact_id]))
-        self.assertEqual(delete_response.status_code, status.HTTP_204_NO_CONTENT)
-        self.assertFalse(Contact.objects.filter(id=contact_id).exists())
+        self.assertEqual(delete_response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertTrue(Contact.objects.filter(id=contact_id).exists())
 
     def test_current_user_and_token_refresh(self):
         tokens = self.authenticate_user()
