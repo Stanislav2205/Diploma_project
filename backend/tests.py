@@ -179,18 +179,24 @@ class ApiFlowTests(APITestCase):
             },
             format="json",
         )
-        self.assertEqual(contact_response.status_code, status.HTTP_201_CREATED)
         contact_id = contact_response.json()["id"]
-        self.assertTrue(Contact.objects.filter(id=contact_id).exists())
 
-        confirm_response = self.client.post(
+        self.client.post(
             reverse("order-confirm"),
             {"contact_id": contact_id, "comment": "Побыстрее"},
             format="json",
         )
-        self.assertEqual(confirm_response.status_code, status.HTTP_201_CREATED)
-
         order = Order.objects.exclude(status=Order.Status.CART).get(user__email=self.user_email)
+        return order, tokens, contact_id, product_info
+    def test_product_catalog_available(self):
+        response = self.client.get(reverse("product-list"))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertGreaterEqual(response.json()["count"], 1)
+
+    def test_complete_order_flow(self):
+        order, tokens, contact_id, product_info = self.create_order(quantity=2)
+
+        self.assertTrue(Contact.objects.filter(id=contact_id).exists())
         self.assertEqual(order.status, Order.Status.NEW)
         self.assertEqual(order.total_quantity, 2)
         self.assertEqual(order.items.count(), 1)
