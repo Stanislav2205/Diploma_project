@@ -283,7 +283,8 @@ class PartnerImportSerializer(serializers.Serializer):
     file = serializers.FileField(required=False)
 
     def validate(self, attrs):
-        if not attrs.get("url") and not attrs.get("data") and "file" not in self.context.get("request_data", {}):
+        has_file = bool(self.context.get("request_files"))
+        if not attrs.get("url") and not attrs.get("data") and not has_file:
             raise serializers.ValidationError(_("Нужно предоставить url, data или file."))
         return attrs
 
