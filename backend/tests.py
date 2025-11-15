@@ -245,3 +245,164 @@ class ApiFlowTests(APITestCase):
         orders_response = self.client.get(reverse("order-list"))
         self.assertEqual(orders_response.status_code, status.HTTP_200_OK)
         self.assertEqual(orders_response.json()["count"], 1)
+
+    def test_email_confirmation_invalid_token(self):
+        email = "another@example.com"
+        password = "StrongPass123!"
+        register_payload = {
+            "email": email,
+            "password": password,
+            "first_name": "Another",
+            "last_name": "User",
+            "role": User.Role.BUYER,
+        }
+        response = self.client.post(reverse("auth-register"), register_payload)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+        invalid_response = self.client.post(
+            reverse("auth-confirm"),
+            {"email": email, "token": "wrong-token"},
+        )
+        self.assertEqual(invalid_response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_cart_validation_update_and_delete(self):
+        tokens = self.authenticate_user()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {tokens['access']}")
+
+        product_info = ProductInfo.objects.first()
+        too_much = self.client.post(
+            reverse("cart"),
+            {"product_info": product_info.id, "quantity": product_info.quantity + 100},
+            format="json",
+        )
+        self.assertEqual(too_much.status_code, status.HTTP_400_BAD_REQUEST)
+
+        add_response = self.client.post(
+            reverse("cart"),
+            {"product_info": product_info.id, "quantity": 1},
+            format="json",
+        )
+        self.assertEqual(add_response.status_code, status.HTTP_201_CREATED)
+
+        patch_response = self.client.patch(
+            reverse("cart"),
+            {"product_info": product_info.id, "quantity": 3},
+            format="json",
+        )
+        self.assertEqual(patch_response.status_code, status.HTTP_200_OK)
+
+        delete_response = self.client.delete(f"{reverse('cart')}?product_info={product_info.id}")
+        self.assertEqual(delete_response.status_code, status.HTTP_204_NO_CONTENT)
+
+    def test_contact_list_update_delete(self):
+        order, tokens, contact_id, _ = self.create_order(quantity=1)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {tokens['access']}")
+
+        list_response = self.client.get(reverse("contact-list"))
+        self.assertEqual(list_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(list_response.json()), 1)
+
+        patch_response = self.client.patch(
+            reverse("contact-detail", args=[contact_id]),
+            {"city": "Санкт-Петербург"},
+            format="json",
+        )
+        self.assertEqual(patch_response.status_code, status.HTTP_200_OK)
+
+        delete_response = self.client.delete(reverse("contact-detail", args=[contact_id]))
+        self.assertEqual(delete_response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(Contact.objects.filter(id=contact_id).exists())
+
+    def test_current_user_and_token_refresh(self):
+        tokens = self.authenticate_user()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {tokens['access']}")
+
+        me_response = self.client.get(reverse("auth-me"))
+        self.assertEqual(me_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(me_response.json()["email"], self.user_email)
+
+        refresh_response = self.client.post(
+            reverse("token-refresh"),
+            {"refresh": tokens["refresh"]},
+            format="json",
+        )
+        self.assertEqual(refresh_response.status_code, status.HTTP_200_OK)
+        self.assertIn("access", refresh_response.json())
+
+    def test_product_detail_and_order_detail(self):
+        order, tokens, contact_id, product_info = self.create_order(quantity=1)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {tokens['access']}")
+
+        product_detail = self.client.get(reverse("product-detail", args=[product_info.product_id]))
+        self.assertEqual(product_detail.status_code, status.HTTP_200_OK)
+
+        order_detail = self.client.get(reverse("order-detail", args=[order.id]))
+        self.assertEqual(order_detail.status_code, status.HTTP_200_OK)
+
+    def test_partner_profile_import_and_orders(self):
+        order, _, _, _ = self.create_order(quantity=1)
+        self.client.credentials()  # reset headers
+
+        partner_login = self.client.post(
+            reverse("token-obtain"),
+            {"email": "supplier@example.com", "password": "Supplier123!"},
+        )
+        self.assertEqual(partner_login.status_code, status.HTTP_200_OK)
+        partner_tokens = partner_login.json()
+
+        partner_client = APIClient()
+        partner_client.credentials(HTTP_AUTHORIZATION=f"Bearer {partner_tokens['access']}")
+
+        profile_response = partner_client.get(reverse("partner-profile"))
+        self.assertEqual(profile_response.status_code, status.HTTP_200_OK)
+
+        patch_response = partner_client.patch(
+            reverse("partner-profile"),
+            {"name": "Updated Shop", "is_active": False},
+            format="json",
+        )
+        self.assertEqual(patch_response.status_code, status.HTTP_200_OK)
+        self.assertFalse(patch_response.json()["is_active"])
+
+        import_response = partner_client.post(
+            reverse("partner-import"),
+            {"data": CATALOG_PAYLOAD},
+            format="json",
+        )
+        self.assertEqual(import_response.status_code, status.HTTP_200_OK)
+
+        orders_response = partner_client.get(reverse("partner-orders"))
+        self.assertEqual(orders_response.status_code, status.HTTP_200_OK)
+        self.assertGreaterEqual(len(orders_response.json()), 1)
+
+    def test_admin_can_update_order_status(self):
+        order, tokens, _, _ = self.create_order(quantity=1)
+        self.client.credentials()
+
+        admin_email = "admin@example.com"
+        admin_password = "Admin123!"
+        User.objects.create_superuser(
+            email=admin_email,
+            password=admin_password,
+            first_name="Admin",
+            last_name="User",
+        )
+        admin_login = self.client.post(
+            reverse("token-obtain"),
+            {"email": admin_email, "password": admin_password},
+        )
+        self.assertEqual(admin_login.status_code, status.HTTP_200_OK)
+        admin_tokens = admin_login.json()
+
+        admin_client = APIClient()
+        admin_client.credentials(HTTP_AUTHORIZATION=f"Bearer {admin_tokens['access']}")
+
+        response = admin_client.patch(
+            reverse("order-status-update", args=[order.id]),
+            {"status": Order.Status.CONFIRMED},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        order.refresh_from_db()
+        self.assertEqual(order.status, Order.Status.CONFIRMED)
