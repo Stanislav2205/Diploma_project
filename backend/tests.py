@@ -1,10 +1,16 @@
 from copy import deepcopy
+from decimal import Decimal
+from datetime import timedelta
+from unittest.mock import patch
 
+import requests
 from django.core import mail
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
 from django.urls import reverse
-from rest_framework import status
-from rest_framework.test import APITestCase, APIClient, APIRequestFactory
+from django.utils import timezone
+from rest_framework import serializers, status
+from rest_framework.test import APIClient, APITestCase, APIRequestFactory
 
 from backend.models import (
     Category,
@@ -14,15 +20,16 @@ from backend.models import (
     Parameter,
     Product,
     ProductInfo,
+    ProductParameter,
     Shop,
     User,
     OrderItem,
 )
 from backend.services.importer import CatalogImporter
 from backend.serializers import (
-    BacketSerializer,
+    BasketSerializer,
     OrderItemSerializer,
-    PartherImportSerializer,
+    PartnerImportSerializer,
 )
 
 
@@ -55,6 +62,7 @@ CATALOG_PAYLOAD = {
     ],
 }
 
+
 class CatalogImporterTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(
@@ -67,6 +75,7 @@ class CatalogImporterTests(TestCase):
     def test_import_payload_creates_entities(self):
         importer = CatalogImporter(self.shop)
         result = importer.import_payload(CATALOG_PAYLOAD)
+
         self.assertEqual(result.categories_created, 2)
         self.assertEqual(result.products_created, 2)
         self.assertEqual(result.product_infos_created, 2)
@@ -102,7 +111,7 @@ class CatalogImporterTests(TestCase):
         self.assertEqual(importer._to_decimal(Decimal("1.23")), Decimal("1.23"))
         with self.assertRaises(ValueError):
             importer._to_decimal(object())
-    
+
     def test_goods_without_category_are_skipped(self):
         importer = CatalogImporter(self.shop)
         payload = {
@@ -111,6 +120,168 @@ class CatalogImporterTests(TestCase):
         }
         result = importer.import_payload(payload)
         self.assertEqual(result.products_created, 0)
+
+    def test_category_without_name_is_ignored(self):
+        importer = CatalogImporter(self.shop)
+        payload = {
+            "categories": [{"id": 10}],
+            "goods": [],
+        }
+        result = importer.import_payload(payload)
+        self.assertEqual(result.categories_created, 0)
+
+    def test_iter_parameters_handles_non_dict(self):
+        importer = CatalogImporter(self.shop)
+        self.assertEqual(list(importer._iter_parameters({"parameters": []})), [])
+
+
+class ModelRepresentationTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email="user@example.com",
+            password="UserPass123!",
+            first_name="Test",
+            last_name="User",
+        )
+        self.shop = Shop.objects.create(owner=self.user, name="Shop Name")
+        self.category = Category.objects.create(name="Category")
+        self.product = Product.objects.create(category=self.category, name="Product", description="Desc")
+        self.product_info = ProductInfo.objects.create(
+            product=self.product,
+            shop=self.shop,
+            external_id=1,
+            model="model-x",
+            name="Product info",
+            price=Decimal("10.00"),
+            price_rrc=Decimal("12.00"),
+            quantity=5,
+        )
+        self.parameter = Parameter.objects.create(name="Color")
+        ProductParameter.objects.create(product_info=self.product_info, parameter=self.parameter, value="Red")
+        self.contact = Contact.objects.create(
+            user=self.user,
+            first_name="Test",
+            last_name="User",
+            patronymic="Middle",
+            email="user@example.com",
+            phone="+70000000000",
+            city="City",
+            street="Street",
+            house="1",
+        )
+        self.order = Order.objects.create(user=self.user, contact=self.contact, status=Order.Status.NEW)
+        self.order_item = OrderItem.objects.create(
+            order=self.order,
+            product_info=self.product_info,
+            quantity=2,
+            price=Decimal("10.00"),
+        )
+        self.token = EmailConfirmationToken.objects.create(user=self.user)
+
+    def test_string_representations(self):
+        self.assertEqual(str(self.user), "Test User")
+        self.assertEqual(str(self.shop), "Shop Name")
+        self.assertEqual(str(self.category), "Category")
+        self.assertEqual(str(self.product), "Product")
+        self.assertIn("Product", str(self.product_info))
+        self.assertEqual(str(self.parameter), "Color")
+        self.assertIn("Color", str(self.product_info.parameters.first()))
+        self.assertIn("City", str(self.contact))
+        self.assertIn("Order", str(self.order))
+        self.assertIn("x 2", str(self.order_item))
+        self.assertIn(self.user.email, str(self.token))
+
+    def test_order_totals_and_token_mark_used(self):
+        self.assertEqual(self.order.total_quantity, 2)
+        self.assertEqual(self.order.total_cost, Decimal("20.00"))
+        self.assertFalse(self.token.is_used)
+        self.token.mark_as_used()
+        self.assertTrue(self.token.is_used)
+
+    def test_user_manager_validations(self):
+        with self.assertRaises(ValueError):
+            User.objects.create_user(email="", password="123")
+        with self.assertRaises(ValueError):
+            User.objects.create_superuser(
+                email="admin1@example.com",
+                password="Admin123!",
+                is_staff=False,
+            )
+        with self.assertRaises(ValueError):
+            User.objects.create_superuser(
+                email="admin2@example.com",
+                password="Admin123!",
+                is_superuser=False,
+            )
+
+
+class SerializerValidationTests(TestCase):
+    def setUp(self):
+        self.factory = APIRequestFactory()
+        self.user = User.objects.create_user(
+            email="buyer2@example.com",
+            password="BuyerPass123!",
+            first_name="Buyer",
+            last_name="Two",
+        )
+        self.other_user = User.objects.create_user(
+            email="other@example.com",
+            password="Other123!",
+            first_name="Other",
+            last_name="User",
+        )
+        self.shop = Shop.objects.create(owner=self.other_user, name="Another Shop")
+        self.category = Category.objects.create(name="Other Category")
+        self.product = Product.objects.create(category=self.category, name="Another product")
+        self.product_info = ProductInfo.objects.create(
+            product=self.product,
+            shop=self.shop,
+            external_id=5,
+            price=Decimal("5"),
+            price_rrc=Decimal("6"),
+            quantity=10,
+        )
+        self.contact = Contact.objects.create(
+            user=self.other_user,
+            first_name="Other",
+            last_name="User",
+            email="other@example.com",
+            phone="+79999999991",
+            city="City",
+            street="Street",
+            house="2",
+        )
+        self.order = Order.objects.create(user=self.user)
+        OrderItem.objects.create(
+            order=self.order,
+            product_info=self.product_info,
+            quantity=2,
+            price=Decimal("5"),
+        )
+
+    def test_order_item_serializer_quantity_validation(self):
+        serializer = OrderItemSerializer(
+            data={"product_info_id": self.product_info.id, "quantity": 0},
+            context={"order": self.order},
+        )
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("quantity", serializer.errors)
+        with self.assertRaises(serializers.ValidationError):
+            OrderItemSerializer().validate_quantity(0)
+        self.assertEqual(OrderItemSerializer().validate_quantity(1), 1)
+
+    def test_partner_import_serializer_requires_payload(self):
+        serializer = PartnerImportSerializer(
+            data={},
+            context={"request_files": None},
+        )
+        self.assertFalse(serializer.is_valid())
+
+    def test_basket_serializer_totals(self):
+        serializer = BasketSerializer(self.order)
+        data = serializer.data
+        self.assertEqual(data["total_quantity"], 2)
+        self.assertEqual(Decimal(str(data["total_cost"])), Decimal("10"))
 
 
 @override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
@@ -153,45 +324,7 @@ class ApiFlowTests(APITestCase):
         )
         self.assertEqual(token_response.status_code, status.HTTP_200_OK)
         return token_response.json()
-    def create_order(self, quantity=2):
-        tokens = self.authenticate_user()
-        access = tokens["access"]
-        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
-        self.assertEqual(orders_response.json()["count"], 1)
 
-        product_info = ProductInfo.objects.first()
-        add_response = self.client.post(
-            reverse("cart"),
-            {"product_info": product_info.id, "quantity": quantity},
-            format="json",
-        )
-        contact_response = self.client.post(
-            reverse("contact-list"),
-            {
-                "first_name": "Иван",
-                "last_name": "Иванов",
-                "patronymic": "Иванович",
-                "email": self.user_email,
-                "phone": "+79999999999",
-                "city": "Москва",
-                "street": "Тверская",
-                "house": "1",
-            },
-            format="json",
-        )
-        self.assertEqual(add_response.status_code, status.HTTP_201_CREATED)
-
-        contact_id = contact_response.json()["id"]
-
-        confirm_response = self.client.post(
-            reverse("order-confirm"),
-            {"contact_id": contact_id, "comment": "Побыстрее"},
-            format="json",
-        )
-        self.assertEqual(confirm_response.status_code, status.HTTP_201_CREATED)
-        order = Order.objects.exclude(status=Order.Status.CART).get(user__email=self.user_email)
-        return order, tokens, contact_id, product_info
-    
     def create_order(self, quantity=2):
         tokens = self.authenticate_user()
         access = tokens["access"]
@@ -231,7 +364,7 @@ class ApiFlowTests(APITestCase):
 
         order = Order.objects.exclude(status=Order.Status.CART).get(user__email=self.user_email)
         return order, tokens, contact_id, product_info
-    
+
     def test_product_catalog_available(self):
         response = self.client.get(reverse("product-list"))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -268,6 +401,29 @@ class ApiFlowTests(APITestCase):
         )
         self.assertEqual(invalid_response.status_code, status.HTTP_400_BAD_REQUEST)
 
+    def test_email_confirmation_requires_fields_and_expiration(self):
+        empty_response = self.client.post(reverse("auth-confirm"), {})
+        self.assertEqual(empty_response.status_code, status.HTTP_400_BAD_REQUEST)
+
+        email = "expired@example.com"
+        password = "StrongPass123!"
+        register_payload = {
+            "email": email,
+            "password": password,
+            "first_name": "Expired",
+            "last_name": "User",
+            "role": User.Role.BUYER,
+        }
+        self.client.post(reverse("auth-register"), register_payload)
+        token = EmailConfirmationToken.objects.get(user__email=email)
+        token.expires_at = timezone.now() - timedelta(minutes=5)
+        token.save(update_fields=["expires_at"])
+        expired_response = self.client.post(
+            reverse("auth-confirm"),
+            {"email": email, "token": token.token},
+        )
+        self.assertEqual(expired_response.status_code, status.HTTP_400_BAD_REQUEST)
+
     def test_cart_validation_update_and_delete(self):
         tokens = self.authenticate_user()
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {tokens['access']}")
@@ -287,6 +443,9 @@ class ApiFlowTests(APITestCase):
         )
         self.assertEqual(add_response.status_code, status.HTTP_201_CREATED)
 
+        get_response = self.client.get(reverse("cart"))
+        self.assertEqual(get_response.status_code, status.HTTP_200_OK)
+
         patch_response = self.client.patch(
             reverse("cart"),
             {"product_info": product_info.id, "quantity": 3},
@@ -296,6 +455,12 @@ class ApiFlowTests(APITestCase):
 
         delete_response = self.client.delete(f"{reverse('cart')}?product_info={product_info.id}")
         self.assertEqual(delete_response.status_code, status.HTTP_204_NO_CONTENT)
+
+        missing_response = self.client.delete(reverse("cart"))
+        self.assertEqual(missing_response.status_code, status.HTTP_400_BAD_REQUEST)
+
+        not_found_response = self.client.delete(f"{reverse('cart')}?product_info=999999")
+        self.assertEqual(not_found_response.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_contact_list_update_delete(self):
         order, tokens, contact_id, _ = self.create_order(quantity=1)
@@ -315,6 +480,44 @@ class ApiFlowTests(APITestCase):
         delete_response = self.client.delete(reverse("contact-detail", args=[contact_id]))
         self.assertEqual(delete_response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertTrue(Contact.objects.filter(id=contact_id).exists())
+
+    def test_order_confirm_requires_non_empty_cart(self):
+        tokens = self.authenticate_user()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {tokens['access']}")
+        response = self.client.post(reverse("order-confirm"), {"contact_id": 1}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_order_confirm_rejects_foreign_contact(self):
+        tokens = self.authenticate_user()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {tokens['access']}")
+        product_info = ProductInfo.objects.first()
+        self.client.post(
+            reverse("cart"),
+            {"product_info": product_info.id, "quantity": 1},
+            format="json",
+        )
+        foreign_user = User.objects.create_user(
+            email="foreign@example.com",
+            password="Foreign123!",
+            first_name="For",
+            last_name="Eigner",
+        )
+        foreign_contact = Contact.objects.create(
+            user=foreign_user,
+            first_name="For",
+            last_name="Eigner",
+            email="foreign@example.com",
+            phone="+79999999998",
+            city="City",
+            street="Street",
+            house="5",
+        )
+        response = self.client.post(
+            reverse("order-confirm"),
+            {"contact_id": foreign_contact.id},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
     def test_current_user_and_token_refresh(self):
         tokens = self.authenticate_user()
@@ -377,6 +580,51 @@ class ApiFlowTests(APITestCase):
         orders_response = partner_client.get(reverse("partner-orders"))
         self.assertEqual(orders_response.status_code, status.HTTP_200_OK)
         self.assertGreaterEqual(orders_response.json()["count"], 1)
+
+    def test_partner_import_invalid_cases(self):
+        self.create_order(quantity=1)
+        self.client.credentials()
+        partner_login = self.client.post(
+            reverse("token-obtain"),
+            {"email": "supplier@example.com", "password": "Supplier123!"},
+        )
+        partner_tokens = partner_login.json()
+        partner_client = APIClient()
+        partner_client.credentials(HTTP_AUTHORIZATION=f"Bearer {partner_tokens['access']}")
+
+        with patch("backend.views.requests.get", side_effect=requests.RequestException("boom")):
+            response = partner_client.post(
+                reverse("partner-import"),
+                {"url": "http://example.com/catalog.yaml"},
+                format="json",
+            )
+            self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+        class DummyResponse:
+            text = ": invalid yaml"
+
+            def raise_for_status(self):
+                return None
+
+        with patch("backend.views.requests.get", return_value=DummyResponse()):
+            response = partner_client.post(
+                reverse("partner-import"),
+                {"url": "http://example.com/catalog.yaml"},
+                format="json",
+            )
+            self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+        invalid_file = SimpleUploadedFile("bad.yaml", b": invalid yaml", content_type="text/yaml")
+        response = partner_client.post(reverse("partner-import"), {"file": invalid_file})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+        response = partner_client.post(
+            reverse("partner-import"),
+            {"data": ["not", "dict"]},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
     def test_admin_can_update_order_status(self):
         order, tokens, _, _ = self.create_order(quantity=1)
         self.client.credentials()
@@ -391,7 +639,7 @@ class ApiFlowTests(APITestCase):
         )
         admin_login = self.client.post(
             reverse("token-obtain"),
-            {"email": admin_email, "password": admin_password},
+            {"email": admin_email, "password": admin_password},k
         )
         self.assertEqual(admin_login.status_code, status.HTTP_200_OK)
         admin_tokens = admin_login.json()
