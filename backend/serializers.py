@@ -53,6 +53,9 @@ class UserSerializer(serializers.ModelSerializer):
             "email_verified",
         )
 
+class EmailConfirmationSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    token = serializers.CharField()
 
 class ShopSerializer(serializers.ModelSerializer):
     class Meta:
@@ -271,6 +274,16 @@ class PartnerOrderSerializer(serializers.ModelSerializer):
         queryset = obj.items.all()
         if shop is not None:
             queryset = queryset.filter(product_info__shop=shop)
-        serializer = PartnerOrderItemSerializer(queryset, many=True)
+        serializer = PartnerOrderItemSerializer(queryset, many=True, context = self.context)
         return serializer.data
+
+class PartnerImportSerializer(serializers.Serializer):
+    url = serializers.URLField(required=False)
+    data = serializers.JSONField(required=False)
+    file = serializers.FileField(required=False)
+
+    def validate(self, attrs):
+        if not attrs.get("url") and not attrs.get("data") and "file" not in self.context.get("request_data", {}):
+            raise serializers.ValidationError(_("Нужно предоставить url, data или file."))
+        return attrs
 
