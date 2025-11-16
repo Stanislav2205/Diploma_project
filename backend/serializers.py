@@ -228,9 +228,9 @@ class OrderConfirmSerializer(serializers.Serializer):
     contact_id = serializers.PrimaryKeyRelatedField(queryset=Contact.objects.all(), source="contact")
     comment = serializers.CharField(required=False, allow_blank=True)
 
-    def validate_contact(self, contact: Contact):
+    def validate_contact_id(self, contact: Contact):
         request = self.context["request"]
-        if contact.user != request.user:
+        if contact.user_id != request.user.id:
             raise serializers.ValidationError(_("Контакт принадлежит другому пользователю."))
         return contact
 
@@ -274,7 +274,7 @@ class PartnerOrderSerializer(serializers.ModelSerializer):
         queryset = obj.items.all()
         if shop is not None:
             queryset = queryset.filter(product_info__shop=shop)
-        serializer = PartnerOrderItemSerializer(queryset, many=True, context = self.context)
+        serializer = PartnerOrderItemSerializer(queryset, many=True, context=self.context)
         return serializer.data
 
 class PartnerImportSerializer(serializers.Serializer):
