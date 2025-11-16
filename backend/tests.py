@@ -639,7 +639,7 @@ class ApiFlowTests(APITestCase):
         )
         admin_login = self.client.post(
             reverse("token-obtain"),
-            {"email": admin_email, "password": admin_password},k
+            {"email": admin_email, "password": admin_password},
         )
         self.assertEqual(admin_login.status_code, status.HTTP_200_OK)
         admin_tokens = admin_login.json()
