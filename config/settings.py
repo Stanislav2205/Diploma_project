@@ -45,7 +45,6 @@ INSTALLED_APPS = [
     'rest_framework.authtoken',
     'django_filters',
     'drf_spectacular',
-    'backend',
     'backend.apps.BackendConfig',
 ]
 
