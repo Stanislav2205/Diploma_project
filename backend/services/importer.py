@@ -25,7 +25,7 @@ class ImportResult:
 
 
 class CatalogImporter:
-    """Утилита, загружающая полезную нагрузку каталога на уровень сохранения."""
+    """Загрузка каталога"""
 
     def __init__(self, shop: Shop):
         self.shop = shop
