@@ -28,7 +28,7 @@ from .serializers import (
     OrderSerializer,
     OrderStatusSerializer,
     PartnerOrderSerializer,
-    PartherImportSerializer,
+    PartnerImportSerializer,
     ProductSerializer,
     ShopSerializer,
     UserRegistrationSerializer,
@@ -69,7 +69,6 @@ class EmailConfirmationView(APIView):
             400: OpenApiResponse(description="Ошибка подтверждения email."),
         },
     )
-
     def post(self, request, *args, **kwargs):
         email = request.data.get("email")
         token_value = request.data.get("token")
@@ -105,7 +104,7 @@ class ProductViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Product.objects.all().prefetch_related("infos__shop", "infos__parameters__parameter")
     serializer_class = ProductSerializer
     permission_classes = [permissions.AllowAny]
-    filterset_fields = ("category__id", "category__name","infos__shop__id")
+    filterset_fields = ("category__id", "category__name", "infos__shop__id")
     search_fields = ("name", "description", "infos__model")
     ordering_fields = ("name", "infos__price")
 
@@ -118,7 +117,7 @@ class BasketView(APIView):
         order = get_user_cart(request.user)
         serializer = BasketSerializer(order)
         return Response(serializer.data)
-    
+
     @extend_schema(request=BasketItemUpdateSerializer, responses={201: OpenApiResponse(description="Товар добавлен")})
     def post(self, request, *args, **kwargs):
         cart = get_user_cart(request.user)
@@ -134,7 +133,7 @@ class BasketView(APIView):
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response({"detail": "Корзина обновлена."})
-    
+
     @extend_schema(
         parameters=[
             OpenApiParameter(
@@ -166,7 +165,7 @@ class ContactViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         return Contact.objects.filter(user=self.request.user)
-    
+
     def perform_destroy(self, instance):
         try:
             super().perform_destroy(instance)
@@ -207,11 +206,6 @@ class OrderStatusUpdateView(generics.UpdateAPIView):
     serializer_class = OrderStatusSerializer
     permission_classes = [permissions.IsAdminUser]
 
-    def perform_update(self, serializer):
-        order = serializer.save()
-        if order.status == Order.Status.CANCELLED:
-            pass
-
 
 class PartnerProfileView(generics.RetrieveUpdateAPIView):
     serializer_class = ShopSerializer
@@ -240,20 +234,28 @@ class PartnerImportView(APIView):
                 response.raise_for_status()
             except requests.RequestException as exc:
                 return Response({"detail": f"Ошибка загрузки данных: {exc}"}, status=status.HTTP_400_BAD_REQUEST)
-            payload = yaml.safe_load(response.text)
+            try:
+                payload = yaml.safe_load(response.text)
+            except yaml.YAMLError as exc:
+                return Response({"detail": f"Ошибка парсинга YAML: {exc}"}, status=status.HTTP_400_BAD_REQUEST)
         elif "file" in request.FILES:
             uploaded = request.FILES["file"]
-            payload = yaml.safe_load(uploaded.read())
+            try:
+                payload = yaml.safe_load(uploaded.read())
+            except yaml.YAMLError as exc:
+                return Response({"detail": f"Ошибка парсинга YAML: {exc}"}, status=status.HTTP_400_BAD_REQUEST)
         elif "data" in validated:
             payload = validated["data"]
 
         if not isinstance(payload, dict):
             return Response({"detail": "Неверный формат данных для импорта."}, status=status.HTTP_400_BAD_REQUEST)
 
-        shop = Shop.objects.get(owner=request.user)
+        shop, _ = Shop.objects.get_or_create(
+            owner=request.user,
+            defaults={"name": request.user.company or request.user.email},
+        )
         importer = CatalogImporter(shop)
         result = importer.import_payload(payload)
-        
         return Response(
             {
                 "detail": "Импорт завершён успешно.",
@@ -263,7 +265,6 @@ class PartnerImportView(APIView):
                     "product_infos": result.product_infos_created,
                     "parameters": result.parameters_created,
                 },
-                "debug_info": str(payload)
             }
         )
 
@@ -271,18 +272,22 @@ class PartnerImportView(APIView):
 class PartnerOrdersView(generics.ListAPIView):
     serializer_class = PartnerOrderSerializer
     permission_classes = [permissions.IsAuthenticated, IsShop]
-    
+
     def get_queryset(self):
-        return Order.objects.filter(items__product_info__shop__owner=self.request.user).distinct()
-    
-    def list(self, request, *args, **kwargs):
-        queryset = self.get_queryset()
-        serializer = self.get_serializer(queryset, many=True)
-        return Response({
-            "orders": serializer.data,
-            "count": len(serializer.data)
-        })
+        shop = self._get_shop()
+        return (
+            Order.objects.filter(items__product_info__shop=shop)
+            .exclude(status=Order.Status.CART)
+            .prefetch_related("items__product_info__product", "items__product_info__shop")
+            .distinct()
+        )
 
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context["shop"] = self._get_shop()
+        return context
 
-def test_function():
-    pass
+    def _get_shop(self) -> Shop:
+        if not hasattr(self, "_shop"):
+            self._shop = get_object_or_404(Shop, owner=self.request.user)
+        return self._shop
