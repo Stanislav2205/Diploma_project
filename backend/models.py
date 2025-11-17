@@ -233,6 +233,7 @@ class Contact(models.Model):
     class Meta:
         verbose_name = _("Контакт")
         verbose_name_plural = _("Контакты")
+        ordering = ("-created_at",)
 
     def __str__(self) -> str:
         return f"{self.last_name} {self.first_name}, {self.city}"
